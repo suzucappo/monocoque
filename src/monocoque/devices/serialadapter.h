@@ -25,5 +25,6 @@ int monocoque_serial_write_block(uint8_t serialdevicenum, void* data, size_t siz
 int monocoque_serial_read_block(uint8_t serialdevicenum, void* data, size_t size, int timeout);
 int monocoque_serial_open(SerialDevice* serialdevice, const char* port);
 int monocoque_serial_free(SerialDevice* serialdevice);
+int monocoque_serial_read(uint8_t serialdevicenum, void* buffer, size_t size, int timeout);
 
 #endif
