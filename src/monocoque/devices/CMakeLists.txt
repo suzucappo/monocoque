@@ -19,6 +19,8 @@ set(devices_source_files
   hapticeffect.c
   sound.h
   sound.c
+  moza_wheel_detect.c
+  moza_wheel_detect.h
   usb/revburner.h
   usb/revburner.c
   usb/cslelitev3.h
