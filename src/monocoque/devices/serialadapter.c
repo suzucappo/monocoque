@@ -161,6 +161,40 @@ int monocoque_serial_read_block(uint8_t serialdevicenum, void* data, size_t size
     return result;
 }
 
+int monocoque_serial_read(uint8_t serialdevicenum, void* buffer, size_t size, int timeout)
+{
+    slogt("serial device id %i", serialdevicenum);
+    monocoque_serial_device monocoque_serial_dev = monocoque_serial_devices[serialdevicenum];
+
+    slogt("port name: %s, busy %i, open %i, openfail %i",
+          monocoque_serial_dev.portname,
+          monocoque_serial_dev.busy,
+          monocoque_serial_dev.open,
+          monocoque_serial_dev.openfail);
+
+    if (monocoque_serial_dev.port == NULL) {
+        sloge("port is null");
+        return -1;
+    }
+
+    int result = -1;
+    if (monocoque_serial_dev.open == true) {
+        while (monocoque_serial_dev.busy == true) {
+            slogt("waiting on busy port...");
+            continue;
+        }
+
+        monocoque_serial_dev.busy = true;
+        result = sp_blocking_read(monocoque_serial_dev.port, buffer, size, timeout);
+        slogt("read result: %d", result);
+    } else {
+        slogw("serial read skipped: device not open");
+    }
+
+    monocoque_serial_dev.busy = false;
+    return result;
+}
+
 int monocoque_serial_open(SerialDevice* serialdevice, const char* portdev)
 {
     int serial_device_num = -1;
