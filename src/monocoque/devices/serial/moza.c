@@ -68,18 +68,17 @@ int moza_update(SerialDevice* serialdevice, unsigned short maxrpm, unsigned shor
 
 int moza_init(SerialDevice* serialdevice, const char* portdev)
 {
-
-    int wheel_id = detect_moza_wheel_id(1);  // Set to 1 for verbose output
-    if (wheel_id >= 0) {
-        moza_serial_template[3] = (unsigned char)wheel_id;
-        slogd("✅ Moza init: using wheel ID 0x%02x", wheel_id);
-    } else {
-        slogw("⚠️ Moza init: could not detect wheel ID, using default ID 0x00");
-    }
-
     serialdevice->id = monocoque_serial_open(serialdevice, portdev);
     if (serialdevice->id < 0)
         return serialdevice->id;
+
+    int wheel_id = detect_moza_wheel_id(serialdevice, 0);  // or 1 for verbose
+    if (wheel_id >= 0) {
+        moza_serial_template[3] = (unsigned char)wheel_id;
+        slogd("✅ Detected wheel ID: 0x%02x", wheel_id);
+    } else {
+        slogw("⚠️ Could not detect wheel ID, using default ID 0x00");
+    }
 
     return serialdevice->id;
 }
