@@ -1,116 +1,74 @@
 #include "moza_wheel_detect.h"
-#include <libusb-1.0/libusb.h>
+#include "../serialadapter.h"
+
 #include <string.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <ctype.h>
 #include <unistd.h>
-#include <stdio.h>
 
-#define VENDOR_ID     0x346e
-#define PRODUCT_ID    0x0004
-#define INTERFACE_NUM 1
-#define EP_OUT        0x02
-#define EP_IN         0x82
-#define TIMEOUT       1000
+#define MOZA_TIMEOUT 1000
+#define RESPONSE_SIZE 64
 
-static int contains_wheel_signature(const uint8_t *response, int len) {
+static int contains_wheel_signature(const uint8_t *data, int len) {
     for (int i = 0; i < len - 4; i++) {
-        if (isprint(response[i]) && response[i] != '\n') {
-            if (strstr((char *)&response[i], "theta") ||
-                strstr((char *)&response[i], "steering") ||
-                strstr((char *)&response[i], "angle"))
+        if (isprint(data[i]) && data[i] != '\n') {
+            if (strstr((char *)&data[i], "theta") ||
+                strstr((char *)&data[i], "steering") ||
+                strstr((char *)&data[i], "angle")) {
                 return 1;
+                }
         }
     }
     return 0;
 }
 
-static int send_probe_command(libusb_device_handle *handle, uint8_t device_id,
-                              uint8_t *response, int verbose) {
-    uint8_t packet[] = {
-        0x7e, 0x06, 0x41, device_id, 0x12, 0x17, 0x39, 0x01, 0x0d
-    };
+static void build_packet(uint8_t *buffer, uint8_t device_id) {
+    uint8_t raw[] = {0x7e, 0x06, 0x41, device_id, 0x12, 0x17, 0x39, 0x01, 0x0d};
     uint8_t checksum = 0;
-    for (int i = 0; i < sizeof(packet); i++) checksum += packet[i];
-    uint8_t full_packet[sizeof(packet) + 1];
-    memcpy(full_packet, packet, sizeof(packet));
-    full_packet[sizeof(packet)] = checksum;
-
-    if (verbose) {
-        printf("   📤 Sending packet to ID 0x%02x: ", device_id);
-        for (int i = 0; i < sizeof(full_packet); i++)
-            printf("%02x ", full_packet[i]);
-        printf("\n");
-    }
-
-    int transferred, received;
-    libusb_bulk_transfer(handle, EP_OUT, full_packet, sizeof(full_packet), &transferred, TIMEOUT);
-    libusb_bulk_transfer(handle, EP_IN, response, 64, &received, TIMEOUT);
-
-    if (verbose && received > 0) {
-        printf("   📥 Received %d bytes: ", received);
-        for (int i = 0; i < received; i++)
-            printf("%02x ", response[i]);
-        printf("\n");
-    }
-
-    return received;
+    for (int i = 0; i < sizeof(raw); i++) checksum += raw[i];
+    memcpy(buffer, raw, sizeof(raw));
+    buffer[sizeof(raw)] = checksum;
 }
 
-int detect_moza_wheel_id(int verbose) {
-    libusb_context *ctx;
-    libusb_device_handle *handle;
-    uint8_t candidate_ids[] = {0x13, 0x15, 0x17};
+int detect_moza_wheel_id(SerialDevice* serialdevice, int verbose) {
+    uint8_t ids[] = {0x13, 0x15, 0x17};
+    uint8_t packet[10];
+    uint8_t response[RESPONSE_SIZE];
 
-    libusb_init(&ctx);
-    handle = libusb_open_device_with_vid_pid(ctx, VENDOR_ID, PRODUCT_ID);
-    if (!handle) {
-        if (verbose)
-            fprintf(stderr, "❌ Could not open Moza device.\n");
-        libusb_exit(ctx);
-        return -1;
-    }
-
-    if (libusb_kernel_driver_active(handle, INTERFACE_NUM))
-        libusb_detach_kernel_driver(handle, INTERFACE_NUM);
-    libusb_claim_interface(handle, INTERFACE_NUM);
-
-    if (verbose)
-        printf("🔍 Probing Moza device for active wheel ID...\n");
-
-    for (int i = 0; i < sizeof(candidate_ids); i++) {
-        uint8_t id = candidate_ids[i];
-        uint8_t response[64] = {0};
-
+    for (int i = 0; i < sizeof(ids); i++) {
+        uint8_t id = ids[i];
         for (int tries = 0; tries < 5; tries++) {
-            if (verbose)
-                printf("   🔄 Attempt %d with ID 0x%02x\n", tries + 1, id);
+            build_packet(packet, id);
+            memset(response, 0, RESPONSE_SIZE);
 
-            int received = send_probe_command(handle, id, response, verbose);
-            if (received > 0 && contains_wheel_signature(response, received)) {
-                if (verbose)
-                    printf("✅ Wheel likely responds on ID 0x%02x (after %d tries)\n", id, tries + 1);
-                libusb_release_interface(handle, INTERFACE_NUM);
-                libusb_close(handle);
-                libusb_exit(ctx);
+            if (verbose) {
+                printf("🔎 Trying ID 0x%02x (attempt %d): ", id, tries + 1);
+                for (int k = 0; k < sizeof(packet); k++)
+                    printf("%02x ", packet[k]);
+                printf("\n");
+            }
+
+            monocoque_serial_write(serialdevice->id, packet, sizeof(packet), MOZA_TIMEOUT);
+            int bytes = monocoque_serial_read(serialdevice->id, response, RESPONSE_SIZE, MOZA_TIMEOUT);
+
+            if (verbose && bytes > 0) {
+                printf("📨 Got %d bytes: ", bytes);
+                for (int r = 0; r < bytes; r++) printf("%02x ", response[r]);
+                printf("\n");
+            }
+
+            if (bytes > 0 && contains_wheel_signature(response, bytes)) {
+                if (verbose) printf("✅ Matched wheel response on ID 0x%02x\n", id);
                 return id;
             }
 
-            int delay_ms = (1 << tries) * 100;
-            if (verbose)
-                printf("   💤 Waiting %d ms before retry...\n", delay_ms);
-            usleep(delay_ms * 1000);
+            usleep((1 << tries) * 100000);  // exponential backoff
         }
 
-        if (verbose)
-            printf("ID 0x%02x: no valid wheel response after 5 tries.\n", id);
+        if (verbose) printf("❌ No valid wheel response from ID 0x%02x after 5 tries\n", id);
     }
 
-    if (verbose)
-        printf("❌ Could not determine wheel ID reliably.\n");
-
-    libusb_release_interface(handle, INTERFACE_NUM);
-    libusb_close(handle);
-    libusb_exit(ctx);
+    if (verbose) printf("⚠️  Could not detect Moza wheel reliably\n");
     return -1;
 }
